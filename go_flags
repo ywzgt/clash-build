@@ -1,0 +1,5 @@
+export CGO_CPPFLAGS="-DNDEBUG"
+export CGO_CFLAGS="-O3 -g0"
+export CGO_CXXFLAGS="-O3 -g0"
+export CGO_FFLAGS="-O3 -g0"
+export CGO_LDFLAGS="-O3 -g0"

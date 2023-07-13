@@ -1,0 +1,95 @@
+name: Build Clash
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 30 08 */15 * *   #Runs at 08:30 every 15 days. UTC
+  push:
+    branches:
+      - main
+    paths:
+      - 'VERSION'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        check-latest: true
+        go-version: '1.20' # https://go.dev/dl
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Check clash version
+      run: |
+        if test -f VERSION; then
+          VER="$(<VERSION)"
+          continue=y
+          echo "BUILD=1" >>$GITHUB_ENV
+          echo "TAG_NAME=$VER" >>$GITHUB_ENV
+        else
+          if [ -e current_version ]; then
+            OLD_VER="$(<current_version)"
+          fi
+          VER="$(curl -sI https://github.com/Dreamacro/clash/releases/latest|awk '/^location:/{print$2}'|sed -e 's|.*/||g' -e 's/\s$//g')"
+          if [ "${VER}" != "${OLD_VER}" ]; then
+            continue=y
+            echo "BUILD=1" >>$GITHUB_ENV
+            echo "TAG_NAME=$VER" >>$GITHUB_ENV
+          fi
+        fi
+        case "$continue" in y)
+          sed "/^VERSION=/s/=\(.*\)/=$VER/" -i Makefile
+          git clone https://github.com/Dreamacro/clash -b "$VER"
+          cp -f Makefile clash
+          grep '^VERSION=' clash/Makefile
+          ;;
+        esac
+
+    - name: Build
+      if: ${{ env.BUILD == 1 }}
+      run: cd clash; [ ! -f 'go_flags' ] || . ./go_flags; make -j$(nproc) xz-releases
+
+    - name: Push and create tag
+      if: ${{ env.BUILD == 1 }}
+      run: |
+          git config --local user.name "github-actions"
+          git config --local user.email "noreply@github.com"
+          echo "$TAG_NAME" >current_version
+          [ ! -e VERSION ] || rm -fv VERSION
+          git add .
+          git commit -m "Creating tag ${{ env.TAG_NAME }}"
+          git tag "$TAG_NAME"
+          git push --all
+
+    - name: Upload Release
+      if: ${{ env.BUILD == 1 }}
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        fail_on_unmatched_files: true
+        body: "Changelog: https://github.com/Dreamacro/clash/releases/tag/${{ env.TAG_NAME }}"
+        files: |
+          clash/bin/*.xz
+          clash/bin/*.zip
+
+    - name: Remove old Releases
+      if: ${{ env.BUILD == 1 }}
+      uses: dev-drprasad/delete-older-releases@v0.2.1
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
